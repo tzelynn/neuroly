@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Neuroly dev gallery</title>
+  <meta name="robots" content="noindex">
+  <link rel="stylesheet" href="../assets/css/style.css">
+  <style>
+    .g-model { margin: 32px 0; } .g-item { margin: 16px 0; } .g-label { font: 12px var(--mono); color: var(--ink-3); margin-bottom: 4px; }
+  </style>
+</head>
+<body>
+  <main id="app">
+    <h1 style="margin-top:24px">Dev gallery</h1>
+    <p class="muted">Every feature view and widget used by every model, all expanded on one page, for previewing and screenshot checks. Optional filter: <code>?model=dinov3</code> or <code>?widget=koleo</code>. Not linked from the site.</p>
+  </main>
+  <script type="module">
+    import { h } from '../assets/js/lib/dom.js';
+    import { features } from '../assets/js/components/features.js';
+    import { architecture } from '../assets/js/components/architecture.js';
+    import registry from '../models/registry.js';
+
+    const q = new URLSearchParams(location.search);
+    const app = document.getElementById('app');
+    const onlyModel = q.get('model'), onlyWidget = q.get('widget');
+
+    async function mountWidget(spec) {
+      const el = h('div', { class: 'widget' });
+      const mod = await import(`../assets/js/widgets/${spec.name}.js`);
+      mod.default(el, spec.props || {});
+      return el;
+    }
+
+    for (const id of registry) {
+      if (onlyModel && id !== onlyModel) continue;
+      const m = (await import(`../models/${id}/model.js`)).default;
+      const box = h('section', { class: 'g-model' }, h('h2', {}, m.name));
+      app.append(box);
+      const widgets = [];
+      for (const sec of m.sections) {
+        if (sec.type === 'architecture' && !onlyWidget) box.append(h('div', { class: 'g-item' }, h('div', { class: 'g-label' }, 'architecture'), architecture(sec)));
+        if (sec.type === 'features' && !onlyWidget) for (const st of sec.stages) {
+          box.append(h('div', { class: 'g-item' }, h('div', { class: 'g-label' }, `features · ${st.label} · ${st.view}`), features({ stages: [st] })));
+        }
+        if (sec.widget) widgets.push(sec.widget);
+        for (const it of sec.items || []) if (it.widget) widgets.push(it.widget);
+        for (const st of sec.stages || []) if (st.widget) widgets.push(st.widget);
+      }
+      for (const w of widgets) {
+        if (onlyWidget && w.name !== onlyWidget) continue;
+        try { box.append(h('div', { class: 'g-item panel' }, h('div', { class: 'g-label' }, `widget · ${w.name}`), await mountWidget(w))); }
+        catch (e) { box.append(h('pre', { style: { color: 'var(--bad)' } }, `${w.name}: ${e.stack}`)); }
+      }
+    }
+    document.body.dataset.ready = '1';
+  </script>
+</body>
+</html>

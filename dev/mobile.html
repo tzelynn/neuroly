@@ -1,0 +1,8 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Neuroly mobile preview</title><meta name="robots" content="noindex">
+<style>body{margin:0;background:#ddd;display:flex;gap:16px;padding:16px;flex-wrap:wrap}iframe{width:375px;height:5000px;border:0;background:#fff}</style></head>
+<body><script>
+  // ?page=dinov3 → previews index.html#/dinov3 at phone width (375px).
+  const p = new URLSearchParams(location.search).get('page') || '';
+  const f = document.createElement('iframe'); f.src = '../index.html#/' + p; document.body.append(f);
+</script></body></html>

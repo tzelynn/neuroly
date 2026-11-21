@@ -1,0 +1,161 @@
+// SAM 3 — "SAM 3: Segment Anything with Concepts", Meta (Nov 2025).
+// Facts checked against arXiv 2511.16719 and github.com/facebookresearch/sam3.
+export default {
+  id: 'sam3',
+  name: 'SAM 3',
+  short: 'SAM 3',
+  year: 2025,
+  org: 'Meta',
+  family: 'Promptable segmentation',
+  task: 'Detect, segment & track concepts',
+  params: '848M params',
+  tags: ['open-vocabulary', 'image + video', 'DETR-style', 'SA-Co data engine'],
+  buildsOn: ['vit', 'dinov3'],
+  tagline: 'Give it a short noun phrase or an example box, and it finds, segments and tracks every instance of that concept in images and video. A presence head separates "is it here?" from "where is it?".',
+  paper: { title: 'SAM 3: Segment Anything with Concepts', url: 'https://arxiv.org/abs/2511.16719' },
+  code: 'https://github.com/facebookresearch/sam3',
+  facts: [
+    { value: '4M', label: 'unique concepts in SA-Co/HQ training data' },
+    { value: '200', label: 'object queries in the DETR decoder' },
+    { value: '54.1 vs 72.8', label: 'cgF1 on SA-Co/Gold: SAM 3 vs humans' },
+    { value: '30 ms', label: 'per image, 100+ objects (H200)' },
+  ],
+
+  takeaways: [
+    'The new task, <b>Promptable Concept Segmentation</b> (PCS): <i>all</i> instances of a phrase or exemplar. Compare this with SAM 1/2\'s one-object-per-click.',
+    'How one shared <b>Perception Encoder</b> backbone feeds a <b>DETR-style detector</b> (conditioned on text and exemplars) and a <b>SAM 2-style tracker</b>.',
+    'The <b>presence token</b>: decoupling recognition ("is the concept present?") from localisation reduces false positives on absent concepts.',
+    'DETR training: <b>Hungarian matching</b>, box L1 + GIoU, mask <b>focal + dice</b>, and why <b>hard negatives</b> matter so much.',
+    'How a <b>human + AI data engine</b> (AI annotators and Llama-based verifiers) scaled labels to 4M concepts, a recipe you can borrow.',
+  ],
+
+  sections: [
+    {
+      type: 'architecture',
+      intro: 'Two heads share one backbone. The <b>detector</b> finds every instance of the prompted concept in each frame, and the <b>tracker</b> carries identities through time. Side inputs (text, exemplars) enter at the fusion encoder.',
+      stages: [
+        { name: 'Image / frame', kind: 'io', shape: [1008, 1008, 3], summary: 'Images are resized to 1008×1008. Videos run frame by frame, and the backbone runs once per frame for both heads.', learns: '—' },
+        { name: 'Perception Encoder', kind: 'attn', shape: [72, 72, 1024], tokens: true, label: '≈72×72 tokens', repeat: 32, params: '≈450M', ops: ['ViT, 32 layers, RoPE in every layer', 'windowed attention (3×3 windows of 336 px)', 'global attention in only 4 layers', 'SimpleFPN → multi-scale features'], summary: 'A vision encoder from Meta\'s Perception Encoder family, pretrained contrastively on 5.4B image–text pairs, so its features are already aligned with language. Windowed attention keeps 1008-px inputs affordable.', learns: 'general, language-aligned visual features at multiple scales.', details: 'Token count is approximate; the paper gives a 1008-px input with 336-px windows.' },
+        { name: 'Prompt encoders', kind: 'misc', shape: [1, 32, 1024], tokens: true, label: 'prompt tokens', side: '“yellow bus” + exemplars', params: 'text ≈300M', ops: ['causal text encoder (≤32 tokens)', 'exemplar: position emb + ±label emb + ROI-pooled features', 'small transformer', 'concat → prompt tokens'], summary: 'The noun phrase and any positive or negative exemplar boxes are turned into one set of "prompt tokens". All prompts must describe the same concept.', learns: 'what the user means: text gives the category, exemplars pin down the appearance.' },
+        { name: 'Fusion encoder', kind: 'attn', shape: [72, 72, 256], tokens: true, label: 'conditioned image', repeat: 6, ops: ['self-attention over image tokens', 'cross-attention → prompt tokens', 'MLP'], summary: 'Image features are conditioned on the prompt. Afterwards, tokens that match "yellow school bus" carry that information.', learns: 'prompt-specific saliency: which regions are relevant to <i>this</i> concept.' },
+        { name: 'DETR decoder', kind: 'attn', shape: [1, 201, 256], tokens: true, label: '200 queries + presence', repeat: 6, ops: ['200 learned object queries + 1 presence token', 'self-attention among queries', 'cross-attention → prompt tokens', 'cross-attention → conditioned image (box-relative position bias)', 'per layer: box refinement + match logit'], summary: 'Each query proposes one object: a box and a "matches the prompt" score. The <b>presence token</b> runs alongside and predicts one image-level probability that the concept appears at all.', learns: 'object-level slots, each binding to at most one instance. Duplicates are suppressed by training, not by NMS.', widget: { name: 'presence-head' } },
+        { name: 'Heads', kind: 'head', shape: [1, 200, 256], tokens: true, label: 'scores · boxes · masks', ops: ['score = p(match | present) × p(present)', 'box head (iterative refinement)', 'MaskFormer-style mask head (query · pixel embeddings)', 'semantic seg head (per-pixel, shares presence)'], summary: 'Instance masks come from dot products between query embeddings and multi-scale pixel embeddings. A semantic head also predicts one binary mask for the whole concept.', learns: 'pixel-accurate masks per instance.' },
+        { name: 'Tracker (video)', kind: 'misc', shape: [72, 72, 256], tokens: true, label: 'masklets + IDs', ops: ['SAM 2 design: memory encoder + memory bank', 'memory attention → propagate masks', 'match detections ↔ masklets by IoU', 'masklet detection score, 15-frame confirmation', 'periodic re-prompting from detections'], summary: 'Masks are propagated from the previous frame using a memory of past frames, then reconciled with fresh detections. New objects get new IDs; one-off false detections are discarded.', learns: 'temporal identity: the same bus stays ID 3 through occlusion.', widget: { name: 'tracker' } },
+      ],
+      caption: 'Total ≈848M params: vision ≈450M, text ≈300M, detector + tracker ≈100M.',
+    },
+    {
+      type: 'features',
+      intro: 'Pick a prompt and follow it through the stages: generic backbone features, then prompt-conditioned features after fusion, then final instance masks. Try "dog", which is not in the image.',
+      note: 'Illustrative, using the toy scene. Real SAM 3 runs at 1008 px with 200 queries.',
+      stages: [
+        { label: 'Input', view: 'input' },
+        { label: 'Backbone (PE)', view: 'similarity', caption: 'Language-aligned backbone features, the same for every prompt. Tap a patch: similar regions group together, which is a good basis for open-vocabulary detection.' },
+        { label: 'After fusion', view: 'concept', concepts: ['house', 'window', 'tree', 'dog'], caption: 'After cross-attending to the prompt tokens, image features highlight regions that match the phrase.' },
+        { label: 'Instance masks', view: 'masks', concepts: ['window', 'tree', 'house', 'dog'], caption: 'Every instance gets a separate mask, box and score. For an absent concept the presence score is low and nothing is returned.' },
+      ],
+    },
+    {
+      type: 'losses',
+      intro: 'SAM 3\'s detector is trained like a modern DETR with one twist: <b>presence supervision</b>. Weights below are from the paper (stage 2 detector pretraining).',
+      items: [
+        {
+          name: 'Hungarian matching',
+          formula: '<i>σ̂</i> = argmin<sub><i>σ</i></sub> Σ<sub><i>i</i></sub> ℒ<sub>match</sub>(<i>y<sub>i</sub></i>, <i>ŷ</i><sub><i>σ</i>(<i>i</i>)</sub>)',
+          explain: 'Before computing losses, each ground-truth instance is assigned to exactly one of the 200 queries by optimal bipartite matching on classification and box costs. Matched queries get positive targets; the rest learn "no match". SAM 3 also uses hybrid matching and DAC-DETR dual supervision to speed convergence.',
+          widget: { name: 'hungarian' },
+        },
+        {
+          name: 'Box losses: L1 + GIoU',
+          weight: '5 · L1 + 2 · GIoU',
+          formula: 'ℒ<sub>box</sub> = 5‖<i>b</i> − <i>b̂</i>‖<sub>1</sub> + 2(1 − GIoU(<i>b</i>, <i>b̂</i>))',
+          explain: 'L1 on normalised box coordinates gives precise regression. Generalised IoU is scale-invariant and still provides a gradient when boxes don\'t overlap.',
+        },
+        {
+          name: 'Classification + presence',
+          weight: 'cls × 100 · presence × 20',
+          formula: '<i>s<sub>q</sub></i> = <i>p</i>(match<sub><i>q</i></sub> | present) · <i>p</i>(present),&nbsp;&nbsp; ℒ<sub>pres</sub> = BCE(<i>p</i>(present), 𝟙[concept in image])',
+          explain: 'The presence token is trained with BCE on whether the phrase appears in the image at all. The key detail: on images where the concept is <i>absent</i>, query scores get <b>no gradient</b>. Queries only learn localisation, conditioned on presence, and never have to make a global decision from a local view. In the ablation this adds +1.5 cgF1.',
+          widget: { name: 'presence-head' },
+        },
+        {
+          name: 'Mask losses: focal + dice',
+          weight: '200 · focal + 10 · dice',
+          formula: 'FL(<i>p</i>) = −(1−<i>p</i>)<sup><i>γ</i></sup> log <i>p</i>,&nbsp;&nbsp; ℒ<sub>dice</sub> = 1 − 2|<i>M</i> ∩ <i>M̂</i>| / (|<i>M</i>| + |<i>M̂</i>|)',
+          explain: 'Per-pixel focal loss handles the huge imbalance between background and object pixels and focuses on hard pixels at boundaries. Dice optimises overlap directly. The tracker uses focal : dice : IoU-MAE : occlusion = 20 : 1 : 1 : 1, supervising only the best of its 3 mask hypotheses.',
+          widget: { name: 'focal-dice' },
+        },
+      ],
+    },
+    {
+      type: 'techniques',
+      items: [
+        {
+          name: 'Decouple recognition from localisation',
+          tag: 'core idea',
+          what: 'A single global presence token predicts whether the concept is in the image. Object queries predict only "is <i>this</i> the thing, given that it\'s present?".',
+          why: 'A query that sees only a local region can\'t reliably tell whether "a dog" exists anywhere. Asking it to forces false positives on look-alikes. Factorising the score lets each part solve the problem it is suited to.',
+          apply: 'In any open-set detector or classifier with many "absent" labels (multi-label tagging, defect detection), add an image-level presence head and multiply it into the per-instance scores. Don\'t send negative gradients to the localisers on absent images.',
+        },
+        {
+          name: 'Hard negatives at scale',
+          what: 'For each image, the data engine adds noun phrases that are <i>not</i> present but are easily confused, such as ontology siblings and cousins ("tabby cat" for a Siamese cat) or MLLM proposals. Only those that fool the current model are kept.',
+          why: 'Going from 0 to 30 hard negatives per image raised image-level MCC from 0.44 to 0.68 and cgF1 from 28.3 to 43.0. Recognising what is <i>not</i> there is half the task.',
+          apply: 'Mine negatives adversarially: run your current model, keep the confident mistakes, and add them as explicit negatives. Use a taxonomy (WordNet, Wikidata, your own label tree) to generate near-miss labels.',
+          widget: { name: 'bar-chart', props: { title: 'Effect of hard negatives per image (paper ablation)', decimals: 1, items: [{ label: 'cgF1, 0 negatives', value: 28.3 }, { label: 'cgF1, 30 negatives', value: 43.0, highlight: true }] } },
+        },
+        {
+          name: 'Human + AI data engine',
+          what: 'A loop: mine media, an AI proposes noun phrases, SAM 3 proposes masks, fine-tuned Llama 3.2 verifiers check mask quality and exhaustivity, and humans fix only the failures. This gave SA-Co/HQ: 5.2M images, 4M phrases, 52M masks.',
+          why: 'AI verifiers roughly doubled annotation throughput. Humans spend time only where models fail, so each round improves the model, which makes the next round cheaper.',
+          apply: 'For your own labelling: pre-label with a foundation model (SAM 3 itself), train a cheap verifier to accept or reject, and route only uncertain cases to people. The paper shows that verifier-filtered synthetic data matches human labels when mixed 1:1 with general data.',
+        },
+        {
+          name: 'Detection-guided tracking',
+          what: 'A memory-based tracker propagates masklets. Each frame they are matched to fresh detections (IoU > 0.1). A masklet detection score with a 15-frame confirmation delay removes spurious tracks, and periodic re-prompting from confident detections corrects drift.',
+          why: 'Detectors alone flicker and lose IDs; trackers alone drift and miss new objects. Combining them gives stable identities and recovers from errors.',
+          apply: 'This tracking-by-detection-plus-memory pattern works with any detector. Add a confirmation delay before reporting new tracks, and re-anchor tracks to high-confidence detections periodically.',
+          widget: { name: 'tracker' },
+        },
+        {
+          name: 'Exemplars as prompts',
+          what: 'Positive and negative example boxes are encoded (position + label + ROI features) and concatenated with the text tokens.',
+          why: 'Text is ambiguous ("bolt", "cell"); a box says exactly what you mean. After 3 exemplar clicks, cgF1 improves by +21.6 over text only, with gains plateauing after about 4.',
+          apply: 'For niche or domain-specific categories, a few exemplar boxes often beat prompt engineering. Use negative exemplars to exclude a confusable look-alike.',
+        },
+      ],
+    },
+    {
+      type: 'widget',
+      id: 'results',
+      title: 'How good is it?',
+      nav: 'Results',
+      intro: 'On the SA-Co/Gold benchmark (mask cgF1 = 100 × positive-micro-F1 × image-level MCC; only predictions with confidence > 0.5 count), SAM 3 reaches about 74% of human performance and more than doubles prior systems.',
+      widget: { name: 'bar-chart', props: { unit: 'cgF1', decimals: 1, max: 80, items: [{ label: 'Human', value: 72.8 }, { label: 'SAM 3', value: 54.1, highlight: true }, { label: 'OWLv2*', value: 24.6 }, { label: 'DINO-X', value: 21.3 }, { label: 'Gemini 2.5', value: 13.0 }] } },
+      caption: 'From the SAM 3 paper. LVIS mask AP 48.5, COCO box AP 56.4, CountBench 93.8%, MOSEv2 VOS 60.3 (vs 47.9 for SAM 2.1).',
+    },
+    {
+      type: 'tips',
+      items: [
+        { title: 'Prompting', body: 'Use short, simple noun phrases ("red apple", "striped cat"), not sentences. For complex queries ("the person holding the leftmost umbrella"), use the <b>SAM 3 Agent</b> pattern: an MLLM breaks the request into phrase prompts and then selects among the returned masks.' },
+        { title: 'Fine-tuning on your data', body: 'The repo ships Hydra configs: <code>python sam3/train/train.py -c &lt;config&gt;</code>, with examples for Roboflow-100VL and ODinW 10-shot. The paper\'s few-shot recipe: 40 epochs, LR at 1/10 of standard, batch size 2, mask losses off if you only have boxes. Some runs can diverge, so keep checkpoints.' },
+        { title: 'Use exemplars before fine-tuning', body: 'One to four exemplar boxes often close much of the gap on a new domain at zero training cost. One-exemplar AP is +18.3 over T-Rex2 on COCO.' },
+        { title: 'Compute', body: '30 ms per image on an H200 even with 100+ objects. Video cost grows linearly with the number of tracked objects: about 10 objects at 30 fps on 2 H200s, 64 on 8. Requires Python 3.12+, PyTorch 2.7+, and access to the gated checkpoints on Hugging Face.' },
+        { title: 'Counting & semantic masks', body: 'For counting, the paper sets presence to 1 and counts confident queries (93.8% on CountBench). The semantic head gives one binary mask per concept when you don\'t need instances.' },
+        { title: 'Borrow the pieces', body: 'Even if you don\'t use SAM 3: presence heads, adversarial hard-negative mining, AI-verifier-in-the-loop labelling, and detection-guided tracking each transfer to other detection and segmentation systems.' },
+      ],
+    },
+    {
+      type: 'references',
+      items: [
+        { label: 'SAM 3: Segment Anything with Concepts (2025)', url: 'https://arxiv.org/abs/2511.16719' },
+        { label: 'facebookresearch/sam3 (code, training configs, SA-Co benchmark)', url: 'https://github.com/facebookresearch/sam3' },
+        { label: 'Ravi et al., SAM 2: Segment Anything in Images and Videos (2024)', url: 'https://arxiv.org/abs/2408.00714', note: 'the tracker design' },
+        { label: 'Carion et al., DETR: End-to-End Object Detection with Transformers (2020)', url: 'https://arxiv.org/abs/2005.12872' },
+        { label: 'Cheng et al., MaskFormer (2021)', url: 'https://arxiv.org/abs/2107.06278' },
+        { label: 'Bolya et al., Perception Encoder (2025)', url: 'https://arxiv.org/abs/2504.13181' },
+        { label: 'Lin et al., Focal Loss for Dense Object Detection (2017)', url: 'https://arxiv.org/abs/1708.02002' },
+      ],
+    },
+  ],
+};

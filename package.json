@@ -1,0 +1,10 @@
+{
+  "name": "neuroly",
+  "private": true,
+  "type": "module",
+  "description": "Interactive explainers for vision neural networks. Static site, no build step.",
+  "scripts": {
+    "validate": "node scripts/validate.mjs",
+    "serve": "python3 -m http.server 8000"
+  }
+}

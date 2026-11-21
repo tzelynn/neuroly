@@ -1,0 +1,143 @@
+// ConvNeXt — Liu et al., "A ConvNet for the 2020s" (2022).
+export default {
+  id: 'convnext',
+  name: 'ConvNeXt',
+  short: 'ConvNeXt',
+  year: 2022,
+  org: 'Meta AI (FAIR) & UC Berkeley',
+  family: 'CNN',
+  task: 'Image classification / backbone',
+  params: '28M params (T)',
+  tags: ['supervised', 'pure ConvNet'],
+  buildsOn: ['resnet50', 'vit'],
+  tagline: 'A pure ConvNet that matches Vision Transformers. It is a ResNet "modernised" one design decision at a time, borrowing Transformer ideas without using attention.',
+  paper: { title: 'A ConvNet for the 2020s', url: 'https://arxiv.org/abs/2201.03545' },
+  code: 'https://github.com/facebookresearch/ConvNeXt',
+  facts: [
+    { value: '82.1%', label: 'ImageNet-1k top-1 (ConvNeXt-T)' },
+    { value: '4.5 GFLOPs', label: 'ConvNeXt-T at 224²' },
+    { value: '3 : 3 : 9 : 3', label: 'blocks per stage' },
+    { value: '7×7', label: 'depthwise kernel' },
+  ],
+
+  takeaways: [
+    'Much of the reported "Transformer advantage" was <b>training recipe</b>. A modern recipe alone lifts ResNet-50 from 76.1% to 78.8%.',
+    'How each macro and micro design choice (patchify stem, depthwise 7×7, inverted bottleneck, LayerNorm, GELU) contributes measurable accuracy.',
+    'Why <b>depthwise convolution ≈ attention\'s spatial mixing</b> and <b>1×1 convs ≈ the Transformer MLP</b>.',
+    'The regularisers that make long training work: <b>Mixup / CutMix</b>, <b>stochastic depth</b> and <b>layer scale</b>.',
+    'Why ConvNeXt is a good backbone when you need CNN conveniences (any resolution, fast dense inference) with ViT-level accuracy.',
+  ],
+
+  sections: [
+    {
+      type: 'architecture',
+      intro: 'The ResNet pyramid is still there (4 stages, resolution halves, channels double), but every part has been updated. Tap a stage to see the ConvNeXt block. These are ConvNeXt-T shapes.',
+      stages: [
+        { name: 'Input', kind: 'io', shape: [224, 224, 3], summary: 'An RGB image. ConvNeXt is fully convolutional, so it works at any resolution divisible by 32.', learns: '—' },
+        { name: 'Patchify stem', kind: 'conv', shape: [56, 56, 96], ops: ['4×4 conv, 96, stride 4', 'LayerNorm'], summary: 'Non-overlapping 4×4 patches, like ViT\'s patch embedding but smaller. One layer replaces ResNet\'s 7×7 conv + max-pool.', learns: 'edge, colour and frequency filters over 4×4 patches.' },
+        { name: 'Stage 1', kind: 'conv', shape: [56, 56, 96], repeat: 3, skip: true, ops: ['7×7 depthwise conv', 'LayerNorm', '1×1 conv 96 → 384', 'GELU', '1×1 conv 384 → 96', 'layer scale γ (init 1e-6)', 'drop path'], summary: 'The ConvNeXt block. A large depthwise conv mixes <i>spatially</i> within each channel, then an inverted-bottleneck MLP (1×1 convs) mixes <i>channels</i>. This is the same split as attention → MLP in a Transformer.', learns: 'local textures and edge combinations. The 7×7 kernels grow the receptive field fast (≈76 px after this stage).' },
+        { name: 'Downsample', kind: 'norm', shape: [28, 28, 192], ops: ['LayerNorm', '2×2 conv, stride 2'], summary: 'A separate downsampling layer between stages, not a strided block. The LN before it was essential for stable training.', learns: 'how to merge 2×2 neighbourhoods into richer channels (like Swin\'s patch merging).' },
+        { name: 'Stage 2', kind: 'conv', shape: [28, 28, 192], repeat: 3, skip: true, ops: ['7×7 depthwise conv', 'LayerNorm', '1×1 conv 192 → 768', 'GELU', '1×1 conv 768 → 192', 'γ · drop path'], summary: 'Same block at 28×28.', learns: 'mid-level patterns: repeated textures, simple shapes.' },
+        { name: 'Downsample', kind: 'norm', shape: [14, 14, 384], ops: ['LayerNorm', '2×2 conv, stride 2'], summary: 'Halve the resolution, double the channels.', learns: '—' },
+        { name: 'Stage 3', kind: 'conv', shape: [14, 14, 384], repeat: 9, skip: true, ops: ['7×7 depthwise conv', 'LayerNorm', '1×1 conv 384 → 1536', 'GELU', '1×1 conv 1536 → 384', 'γ · drop path'], summary: 'Most of the compute and depth sits here (ratio 1:1:3:1, borrowed from Swin). Larger variants use 27 blocks in this stage.', learns: 'object parts with large spatial context. The theoretical receptive field is now larger than the image.' },
+        { name: 'Downsample', kind: 'norm', shape: [7, 7, 768], ops: ['LayerNorm', '2×2 conv, stride 2'], summary: 'Final downsampling.', learns: '—' },
+        { name: 'Stage 4', kind: 'conv', shape: [7, 7, 768], repeat: 3, skip: true, ops: ['7×7 depthwise conv', 'LayerNorm', '1×1 conv 768 → 3072', 'GELU', '1×1 conv 3072 → 768', 'γ · drop path'], summary: 'A 7×7 kernel on a 7×7 map: every position sees the whole map.', learns: 'whole-object, class-level features.' },
+        { name: 'Pool + LN + head', kind: 'head', shape: [1, 1, 1000], label: '1000 classes', ops: ['global average pool', 'LayerNorm', 'Linear 768 → 1000'], summary: 'Same as ResNet, with LN before the linear classifier.', learns: 'class templates.' },
+      ],
+      caption: 'ConvNeXt-T: channels (96, 192, 384, 768), blocks (3, 3, 9, 3). S/B/L/XL change depth and width.',
+    },
+    {
+      type: 'widget',
+      id: 'roadmap',
+      title: 'From ResNet to ConvNeXt, step by step',
+      nav: 'Roadmap',
+      intro: 'The paper\'s central experiment: start from ResNet-50 and apply Transformer-inspired changes one at a time, keeping FLOPs roughly constant. Play through the steps and watch the accuracy climb, dips included.',
+      widget: { name: 'convnext-roadmap' },
+    },
+    {
+      type: 'features',
+      intro: 'The feature hierarchy is CNN-like. The large 7×7 depthwise kernels give each stage a much bigger receptive field than ResNet\'s 3×3 at the same depth.',
+      stages: [
+        { label: 'Input', view: 'input' },
+        { label: 'Stem', view: 'edges', res: 56, caption: '4×4 patchify filters respond to oriented edges and colour contrast, already at 56×56.' },
+        { label: 'Stage 1', view: 'textures', res: 56, caption: 'Depthwise 7×7 filters pool edge energy into texture channels at full stage resolution.' },
+        { label: 'Stage 2', view: 'textures', res: 28, caption: 'Coarser, more invariant textures and simple shapes.' },
+        { label: 'Stage 3', view: 'parts', res: 14, caption: 'Part detectors with large context. This stage holds 9 of the 18 blocks.' },
+        { label: 'Stage 4', view: 'objects', res: 7, caption: 'Object-level channels, ready for pooling and the classifier.' },
+      ],
+    },
+    {
+      type: 'losses',
+      intro: 'The loss is still cross-entropy. What changed is how the <i>targets</i> are built: label smoothing plus Mixup and CutMix give soft labels.',
+      items: [
+        {
+          name: 'Cross-entropy with label smoothing',
+          weight: 'ε = 0.1',
+          formula: 'ℒ = −Σ<sub><i>k</i></sub> <i>q<sub>k</sub></i> log <i>p<sub>k</sub></i>,&nbsp;&nbsp; <i>q</i> = (1−<i>ε</i>)·onehot(<i>y</i>) + <i>ε</i>/<i>K</i>',
+          explain: 'The target puts 1−ε on the true class and spreads ε over all classes. The model can no longer reduce the loss by pushing logits to infinity, which improves calibration and transfer.',
+          widget: { name: 'cross-entropy', props: { classes: ['house', 'barn', 'church', 'tree', 'dog'] } },
+        },
+        {
+          name: 'Mixed targets (Mixup / CutMix)',
+          weight: 'α = 0.8 / 1.0',
+          formula: 'ℒ = <i>λ</i> · CE(<i>p</i>, <i>y<sub>A</sub></i>) + (1−<i>λ</i>) · CE(<i>p</i>, <i>y<sub>B</sub></i>),&nbsp;&nbsp; <i>λ</i> ~ Beta(<i>α</i>, <i>α</i>)',
+          explain: 'Two images are combined, and the loss is the matching mix of their two labels. Mixup blends pixels; CutMix pastes a box (λ = area kept). ConvNeXt applies one of the two to every batch.',
+          widget: { name: 'mixup-cutmix' },
+        },
+      ],
+    },
+    {
+      type: 'techniques',
+      items: [
+        {
+          name: 'Depthwise separable convolution',
+          tag: 'core idea',
+          what: 'Split a conv into a <b>depthwise</b> k×k conv (spatial mixing, one filter per channel) and <b>pointwise</b> 1×1 convs (channel mixing).',
+          why: 'It separates "where" from "what", just as self-attention (spatial) and the MLP (channel) do in Transformers. It is far cheaper, so you can afford large kernels and wider channels.',
+          apply: 'Replace dense 3×3 convs in your own CNN with a depthwise 7×7 + inverted-bottleneck MLP. It is a drop-in modernisation. On mobile, depthwise convs are memory-bound, so benchmark real latency, not only FLOPs.',
+          widget: { name: 'bar-chart', props: { title: 'Weights per layer at 384 channels', unit: 'k params', items: [{ label: 'Dense 3×3 conv', value: 1327 }, { label: 'Dense 7×7 conv', value: 7225 }, { label: 'Depthwise 7×7 conv', value: 18.8, highlight: true }], decimals: 1 } },
+        },
+        {
+          name: 'Large kernels (7×7)',
+          what: 'The depthwise kernel grows from 3×3 to 7×7, after moving the depthwise conv to the top of the block so it runs on the narrow tensor.',
+          why: 'It gives a bigger receptive field per layer, like Swin\'s 7×7 attention window. Gains saturate at 7×7 for ImageNet-scale images.',
+          apply: 'For segmentation and dense tasks that need context, large depthwise kernels are a cheap way to get it. RepLKNet and SLaK push this to 31×31 or more.',
+          widget: { name: 'receptive-field', props: { stages: [{ name: 'stem', rf: 4 }, { name: 'stage 1', rf: 76 }, { name: 'stage 2', rf: 224 }, { name: 'stage 3', rf: 1096 }, { name: 'stage 4', rf: 1688 }], input: 224 } },
+        },
+        {
+          name: 'Stochastic depth & layer scale',
+          what: '<b>Stochastic depth</b> randomly skips whole residual blocks during training (rate 0.1 for T, up to 0.5 for XL). <b>Layer scale</b> multiplies each block\'s output by a learnable per-channel γ, initialised to 1e-6.',
+          why: 'Skipping blocks trains an implicit ensemble of shallower networks and is a strong regulariser for deep models. Layer scale makes every block start almost as identity, which stabilises early training of deep, wide networks.',
+          apply: 'Both are one-liners in timm (<code>DropPath</code>, <code>LayerScale</code>) and help any deep residual net, including ViTs and U-Nets. Scale the drop-path rate with model size.',
+          widget: { name: 'stochastic-depth', props: { blocks: 18, pmax: 0.1 } },
+        },
+        {
+          name: 'Modern training recipe',
+          what: 'AdamW (lr 4e-3, batch 4096, wd 0.05), 300 epochs, 20-epoch warmup with cosine decay, RandAugment, Random Erasing, Mixup/CutMix, label smoothing, EMA of the weights.',
+          why: 'This recipe alone took ResNet-50 from 76.1% to 78.8%. Augmentation and long schedules matter as much as architecture.',
+          apply: 'Before concluding that a new architecture is better, re-train your baseline with the same modern recipe. It is the fairest comparison. timm\'s training scripts implement all of it.',
+        },
+      ],
+    },
+    {
+      type: 'tips',
+      items: [
+        { title: 'As a detection or segmentation backbone', body: 'The hierarchical 4-stage output (strides 4, 8, 16, 32) plugs directly into FPN, Mask R-CNN or UPerNet. LayerNorm means no BN headaches at small batch sizes.' },
+        { title: 'Prefer pretrained ConvNeXt V2 or DINOv3 weights', body: 'ConvNeXt V2 adds masked-autoencoder (FCMAE) pretraining and Global Response Normalisation. DINOv3 ships self-supervised ConvNeXt T/S/B/L distilled from a 7B ViT, which are excellent frozen feature extractors.' },
+        { title: 'Fine-tuning settings', body: 'AdamW, layer-wise LR decay (~0.7–0.8), drop-path 0.1–0.4 depending on size, and EMA. Keep LayerNorm in train mode; there are no running statistics to worry about.' },
+        { title: 'Deployment', body: 'There is no attention, so ConvNeXt exports cleanly to ONNX and TensorRT and runs at arbitrary resolutions. Depthwise convs are memory-bound on some accelerators, so profile against ResNet or RegNet for latency-critical use.' },
+      ],
+    },
+    {
+      type: 'references',
+      items: [
+        { label: 'Liu et al., A ConvNet for the 2020s (2022)', url: 'https://arxiv.org/abs/2201.03545' },
+        { label: 'Woo et al., ConvNeXt V2 (2023)', url: 'https://arxiv.org/abs/2301.00808', note: 'FCMAE pretraining and GRN' },
+        { label: 'Huang et al., Deep Networks with Stochastic Depth (2016)', url: 'https://arxiv.org/abs/1603.09382' },
+        { label: 'Zhang et al., mixup (2017)', url: 'https://arxiv.org/abs/1710.09412' },
+        { label: 'Yun et al., CutMix (2019)', url: 'https://arxiv.org/abs/1905.04899' },
+        { label: 'Touvron et al., Going deeper with Image Transformers (CaiT, 2021)', url: 'https://arxiv.org/abs/2103.17239', note: 'introduces layer scale' },
+      ],
+    },
+  ],
+};
