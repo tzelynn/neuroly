@@ -1,5 +1,7 @@
 # neuroly
 
+**Live site: https://tzelynn.github.io/neuroly/**
+
 Interactive, animated explainers for modern vision networks. Each model page covers:
 
 - **Architecture**: a tappable, animated diagram. Box height shows resolution and width shows channels.
@@ -19,11 +21,6 @@ node scripts/validate.mjs      # check all model files
 
 There's no build step and there are no dependencies. Everything is vanilla ES modules, it works
 offline once loaded, and widgets lazy-load and pause when off-screen, so pages stay light on phones.
-
-## Deploy (GitHub Pages)
-
-Push to `main`. `.github/workflows/pages.yml` validates the content and publishes the repo root.
-In the repo settings, set **Pages → Source: GitHub Actions** once.
 
 ## Add a model
 
